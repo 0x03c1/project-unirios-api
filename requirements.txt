@@ -1,0 +1,13 @@
+# trabalhando com dados
+pandas
+numpy
+
+# requisições HTTP
+requests
+
+# formatação do código
+black
+
+# visualização de dados na web
+plotly
+dash
