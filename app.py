@@ -7,6 +7,12 @@ from datetime import datetime
 from dash import Dash, dcc, html, Input, Output
 import plotly.graph_objects as go
 
+SERIES_OPTIONS = [
+    {"label": "IPCA - variação mensal (%) [SGS 433]", "value": 433},
+    {"label": "Personalizada (digite o código SGS abaixo)", "value": -1},
+]
+DEFAULT_SERIE = 433
+
 
 def build_api_url(serie_sgs: int):
     base = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{int(serie_sgs)}/dados"
@@ -163,22 +169,113 @@ def create_figure(df: pd.DataFrame, titulo: str) -> go.Figure:
     return fig
 
 
+def format_stats_text(s: dict) -> str:
+    if pd.isna(s.get("last_val", float("nan"))):
+        return "Resumo dos indicadores\n- \
+            Dados indisponíveis para esta série/período."
+
+    return (
+        "Resumo dos indicadores\n"
+        f"– Último dado ({s['last_date']:%b/%Y}): {s['last_val']:.2f}.\n"
+        f"- Média 12m: {s['mean12']:.2f} (desvio: {s['std12']:.2f}).\n"
+        f"- Tendência 24m: {s['trend24']} (inclinação ≈ {s['slope24']:.3f}).\n"
+        f"- Meses com alta nos últimos 12: {s['ups12']}/12.\n"
+        f"- Nível atual está {s['position']}.\n"
+        f"- Extremos 36m: máx {s['max36']:.2f} ({s['dmax36']:%b/%Y}) | "
+        f"mín {s['min36']:.2f} ({s['dmin36']:%b/%Y})."
+    )
+
+
+# ------------------ Dash App ---------------------
 app = Dash(__name__)
-app.layout = html.Div([
-    html.H1("Análise de Séries Temporais do Banco Central do Brasil"),
-    dcc.Input(
-        id='serie-input',
-        type='number',
-        value=1,
-        min=1,
-        step=1,
-        placeholder="Digite o número da série SGS"
-    ),
-    html.Button('Buscar', id='fetch-button', n_clicks=0),
-    html.Div(id='stats-output'),
-    dcc.Graph(id='time-series-graph')
-])
+app.title = "Sistema Gerenciador de Séries Temporais - SGS/BCB"
+
+app.layout = html.Div(
+    [
+        html.H1("Séries SGS/BCB - Indicadores"),
+        html.P("Escolha uma série do SGS (ex.: IPCA mensal = 1619) ou digite"),
+        html.Div(
+            [
+                dcc.Dropdown(
+                    id="serie-dd",
+                    options=SERIES_OPTIONS,
+                    value=DEFAULT_SERIE,
+                    clearable=False,
+                    style={"maxWidth": 720},
+                ),
+                html.Div(
+                    [
+                        html.Label("Digite o código SGS personalizado: "),
+                        dcc.Input(
+                            id="serie-custom",
+                            type="number",
+                            placeholder="Ex.: 1619",
+                            debounce=True,
+                            style={"width": 200},
+                        ),
+                    ],
+                    style={"marginTop": "8px"},
+                ),
+            ],
+            style={"marginBottom": "12px"},
+        ),
+        html.Div(
+            [
+                html.Button("Atualizar dados", id="btn-update", n_clicks=0),
+                dcc.Interval(id="once", interval=300, n_intervals=0, max_intervals=1),
+            ],
+            style={"display": "flex", "gap": "10px", "alignItems": "center"},
+        ),
+        dcc.Loading(dcc.Graph(id="grafico"), type="default"),
+        html.Pre(
+            id="stats-out",
+            style={
+                "marginTop": "10px",
+                "whiteSpace": "pre-wrap",
+                "background": "#f7f7f7",
+                "padding": "10px",
+                "borderRadius": "8px",
+            },
+        ),
+    ],
+    style={
+        "maxWidth": "980px",
+        "margin": "0 auto",
+        "fontFamily": "Inter, system-ui, Arial",
+        "padding": "20px",
+    },
+)
 
 
-if __name__ == '__main__':
+@app.callback(
+    [Output("grafico", "figure"), Output("stats-out", "children")],
+    [
+        Input("btn-update", "n_clicks"),
+        Input("once", "n_intervals"),
+        Input("serie-dd", "value"),
+        Input("serie-custom", "value"),
+    ],
+)
+def atualizar(_n_clicks, _n_intervals, dd_value, custom_value):
+    # Resolve qual série usar
+    if dd_value == -1 and custom_value:
+        serie = int(custom_value)
+        titulo = f"Série SGS {serie} — variação mensal"
+    else:
+        serie = int(dd_value) if dd_value is not None else DEFAULT_SERIE
+        titulo = (
+            "IPCA - variação mensal (%) [SGS 433]"
+            if serie == 433
+            else f"Série SGS {serie} — variação mensal"
+        )
+
+    # Busca dados e monta saídas
+    df = fetch_data(serie)
+    fig = create_figure(df, titulo=titulo)
+    stats = computer_stats(df)
+    txt = format_stats_text(stats)
+    return fig, txt
+
+
+if __name__ == "__main__":
     app.run(debug=True)
